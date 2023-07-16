@@ -48,6 +48,7 @@ class User(BaseModel, UserMixin):
         payload = {
             'id': self.id,
             'email': self.email,
+            'expires': (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
         }
         return jwt.encode(payload, secret_key, algorithm='HS256')

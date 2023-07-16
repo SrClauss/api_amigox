@@ -12,7 +12,7 @@ from flask.testing import FlaskClient
 from app.models import Group
 import unittest
 import datetime
-
+from freezegun import freeze_time
 
 load_dotenv()
 
@@ -109,6 +109,32 @@ class LoginTestCase(unittest.TestCase):
                                                        'Content-Length': len(payload)})
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(user.id, current_user.id)
+    
+
+    def test_login_with_recovery_code_expired(self):
+        simulated_current_time = datetime.datetime.now()
+
+        with freeze_time(simulated_current_time):
+            with self.app.app_context():
+                with self.app.test_request_context():
+                    user = User.query.filter_by(email='email1@example.com').first()
+                    recovery_code = user.generate_recovery_token()
+
+            simulated_current_time += datetime.timedelta(hours=2)
+
+            with freeze_time(simulated_current_time):
+                with self.app.app_context():
+                    with self.app.test_request_context():
+                        payload = {
+                            'recovery_code': recovery_code
+                        }
+                        response = self.app_test.post('/login_with_recovery_code',
+                                                    json=payload,
+                                                    headers={'Content-Type': 'application/json',
+                                                             'API-Key': getenv('SECRET_KEY'), 
+                                                             'Content-Length': len(payload)})
+                        self.assertEqual(response.status_code, 401)
+            
 
 
 class SignUpTestCase(unittest.TestCase):

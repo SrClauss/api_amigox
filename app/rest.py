@@ -2,17 +2,20 @@
 from flask_restful import request, Resource, Api
 from dotenv import load_dotenv
 from os import getenv
-from flask_login import LoginManager, login_user, current_user
+from flask_login import LoginManager, login_user, current_user, logout_user
 from app.models import User, app, db, Group, Friend
 import re
 from sqlalchemy.exc import IntegrityError, DataError
 from functools import wraps
 import jwt
+import datetime
 
 
 login_manager = LoginManager()
 login_manager.init_app(app)
 api = Api(app)
+
+
 
 def login_required(func):
     """
@@ -174,6 +177,18 @@ class SignUp(Resource):
             return {'message': 'Error creating user'}, 500
 api.add_resource(SignUp, '/signup')
 
+class Logout(Resource):
+    @validate_headers
+    @login_required
+    def get(self):
+        """
+        Handles a GET request to log out the user.
+        """
+        logout_user()
+        return {'message': 'Logout successful'}, 200
+    
+api.add_resource(Logout, '/logout')
+
 class ExchangePassword(Resource):
     @validate_headers
     @login_required
@@ -248,10 +263,13 @@ class LoginWithRecoveryCode(Resource):
         """
         secret_key = getenv('SECRET_KEY')
         payload = jwt.decode(request.json.get('recovery_code'), secret_key, algorithms=['HS256'])
+        if datetime.datetime.strptime(payload.get('expires'), '%Y-%m-%d %H:%M:%S') < datetime.datetime.now():
+            return {'message': 'Recovery code has expired'}, 401
         user = User.query.filter_by(email=payload.get('email')).first()
         login_user(user)
         return {'message': 'Login successful'}, 200
 api.add_resource(LoginWithRecoveryCode, '/login_with_recovery_code')
+
 class CreateGroup(Resource):
     @validate_headers
     @login_required
