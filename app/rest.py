@@ -2,159 +2,156 @@
 from flask_restful import request, Resource, Api
 from dotenv import load_dotenv
 from os import getenv
-from flask_login import LoginManager, login_user, current_user, logout_user
 from app.models import User, app, db, Group, Friend
 import re
 from sqlalchemy.exc import IntegrityError, DataError
 from functools import wraps
 import jwt
 import datetime
+from app.utils import send_confirmation_email, send_recovery_email
+load_dotenv()
 
-
-login_manager = LoginManager()
-login_manager.init_app(app)
 api = Api(app)
 
 
+API_KEY = getenv('API_KEY')
+SECRET_KEY = getenv('SECRET_KEY')
 
-def login_required(func):
-    """
-    Decorator that checks if the user is authenticated before executing the function.
+def validate_api_key(f):
+    @wraps(f)
+    def decorator(*args, **kwargs):
+        """
+        A decorator function that checks the 'API-Key' header in the request and
+        validates it against the predefined API key. If the header is missing or
+        the API key is invalid, it returns a response with an appropriate error
+        message and status code. Otherwise, it calls the decorated function with
+        the given arguments and returns its result.
 
-    Args:
-        func: The function to be decorated.
+        Parameters:
+            f (function): The function to be decorated.
 
-    Returns:
-        The decorated function.
+        Returns:
+            function: A decorated function that performs the 'API-Key' header
+            validation before calling the original function.
+        """
+    
+        if 'API-Key' not in request.headers:
+            return {'message': 'API-Key header not found'}, 401
+        elif request.headers['API-Key'] != API_KEY:
+            return {'message': 'Invalid API Key'}, 401
+        return f(*args, **kwargs)
+    return decorator
 
-    Raises:
-        None.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-       if current_user.is_authenticated:
-           return func(*args, **kwargs)
-       else:
-           return {'message': 'Unauthorized'}, 401
-    return wrapper
+def validate_content_type(f):
+    @wraps(f)
+    def decorator(*args, **kwargs):
+        """
+        Decorator function that checks if the 'Content-Type' header is present in the request headers.
+        If the header is not present or if it is not 'application/json', it returns an error response.
+        Otherwise, it calls the decorated function with the provided arguments.
 
-def validate_headers(func):
-    """
-    This function is a wrapper that validates the request headers and API key before executing the provided function.
+        Parameters:
+            *args: The positional arguments passed to the decorated function.
+            **kwargs: The keyword arguments passed to the decorated function.
 
-    Parameters:
-        *args: Positional arguments passed to the wrapped function.
-        **kwargs: Keyword arguments passed to the wrapped function.
+        Returns:
+            A tuple containing a dictionary with an error message and a status code if the 'Content-Type' header is invalid.
+            Otherwise, it returns the result of the decorated function.
+        """
+        if 'Content-Type' not in request.headers:
+            return {'message': 'Content-Type header not found'}, 415
+        elif request.headers['Content-Type'] != 'application/json':
+            return {'message': 'Content-Type header must be application/json'}, 415
+        return f(*args, **kwargs)
+    return decorator
 
-    Returns:
-        The return value of the wrapped function.
+def required_access_token(f):
+    @wraps(f)
+    def decorator(*args, **kwargs):
+        """
+        Decorator function to handle token authorization.
 
-    Raises:
-        Returns a dictionary with the following keys if the request headers or API key are invalid:
-            - {'message': 'Invalid Content-Type header'} if the 'Content-Type' header is missing or not 'application/json'.
-            - {'message': 'Invalid API-Key header'} if the 'API-Key' header does not match the expected API key.
-            - Returns the wrapped function's return value if the headers and API key are valid.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-      
-        if 'Content-Type' not in request.headers or request.headers['Content-Type'] != 'application/json':
-            return {'message': 'Invalid Content-Type header'}, 400
+        Parameters:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
 
-        api_key = request.headers.get('API-Key')
-        expected_api_key = getenv("SECRET_KEY")
+        Returns:
+            Tuple: A tuple containing the response message and status code.
+        """
+        if 'Authorization' not in request.headers:
+            return {'message': 'Authorization header not found'}, 401
+        token = request.headers['Authorization'].removeprefix('Bearer ')
+    
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        except jwt.ExpiredSignatureError:
+            return {'message': 'Token expired'}, 401
+       
+        if payload.get('exp') < int(datetime.datetime.now().timestamp()):
+            return {'message': 'Token expired'}, 401
+        user = User.query.filter_by(id=payload.get('id')).first()
 
-        if api_key != expected_api_key:
-            return {'message': 'Invalid API-Key header'}, 401
+        return f(*args, **kwargs, user=user)
+    
 
-        return func(*args, **kwargs)
+    return decorator
 
-    return wrapper
-
-@login_manager.user_loader
-def load_user(user_id):
-    """
-    Load a user from the database based on the given user ID.
-
-    Parameters:
-        user_id (int): The ID of the user to load.
-
-    Returns:
-        User: The user object corresponding to the given user ID.
-    """
-    return User.query.get(user_id)
 
 
 
 class Login(Resource):
-    @validate_headers
+    @validate_content_type
+    @validate_api_key
     def post(self):
-        """
+        '''
         Handles a POST request to log in the user.
-
-        Validates the headers of the request using the `validate_headers` decorator.
 
         Parameters:
             None
-
         Example Payload:
             {
                 "email": "email1@example.com",
                 "password": "password1"
             }
+        returns:
+            - If email not is in the database, returns a dictionary with the message 'User does not exist' and a status code of 404.
+            - If password is incorrect, returns a dictionary with the message 'Invalid password' and a status code of 401.
+            - If the user's password is correct, return a dictionary with the acess token and a status code of 200.
 
-        Returns:
-            If the user's password is correct, it logs the user in and returns a dictionary with the message 'Login successful' and the HTTP status code 200.
-            If the user's password is incorrect, it returns a dictionary with the message 'Login failed' and the HTTP status code 401.
-        """
-        data = request.get_json()
-        user = User.query.filter_by(email=data.get('email')).first()
-
-        if user.check_password(data.get('password')):
-            login_user(user)
-            return {'message': 'Login successful'}, 200
-
-        return {'message': 'Login failed'}, 401
+        '''
+        user = User.query.filter_by(email=request.json.get('email')).first()
+        if user:
+            if user.check_password(request.json.get('password')):
+                token = user.generate_access_token()
+                return {'access_token': token}, 200
+            
+        return {'message': 'Invalid login'}, 401
 api.add_resource(Login, '/login')
 
 class SignUp(Resource):
-    @validate_headers
+    @validate_content_type
+    @validate_api_key
     def post(self):
         """
-        Create a new user with the provided information.
+        Handles a POST request to create a new user and generate a token for email verification
         
         Parameters:
             None
         
-        Example Payload:
-            {
-                "name": "John Doe",
-                "email": "email1@example.com",
-                "password": "password1"
-            }
-
         Returns:
-            - If successful, returns a dictionary with the message 'User created' and a status code of 201.
-            - If the user with the provided email already exists, returns a dictionary with the message 'Email already exists' and a status code of 500.
-            - If there is an error creating the user, returns a dictionary with the message 'Error creating user' and a status code of 500.
-
-        Raises:
-            - KeyError: If the required fields 'name', 'email', or 'password' are not provided in the request body.
-            - DataError: If there is an error committing the user to the database.
-
-        Notes:
-            - This function requires the 'validate_headers' decorator to be applied to it.
-            - The email format is validated using a regex pattern.
+            If the request is invalid, returns a dictionary with a 'message' key and a 400 status code.
+            If the user already exists, returns a dictionary with a 'message' key and a 400 status code.
+            If the email is invalid, returns a dictionary with a 'message' key and a 400 status code.
+            If the request is valid, returns a dictionary with a 'message' key, a 201 status code, and sends an email.
         """
+      
         data = request.get_json()
 
-        try:
-            name = data.get('name')
-            email = data.get('email')
-            password = data.get('password')
-        except KeyError:
-            return {'message': 'Invalid input'}, 400
-
+ 
+        name = data.get('name')
+        email = data.get('email')
+        password = data.get('password')
+ 
         if not name or not email or not password:
             return {'message': 'Invalid input'}, 400
 
@@ -164,160 +161,193 @@ class SignUp(Resource):
         if not re.match(r'^[a-z0-9]+@[a-z]+\.[a-z]{2,3}$', email):
             return {'message': 'Invalid email'}, 400
 
-        try:
-            with db.session.begin_nested():
-                user = User(name, email, password)
-                db.session.add(user)
-                db.session.commit()
-                return {'message': 'User created'}, 201
-            
-        except IntegrityError:
-            return {'message': 'Email already exists'}, 500
-        except DataError:
-            return {'message': 'Error creating user'}, 500
+        payload = {
+            'name': name,
+            'email': email,
+            'password': password,
+            'exp': datetime.datetime.now() + datetime.timedelta(days=1)
+        }
+        token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+        send_confirmation_email(email, token)
+        
+        
+        return {'message': 'Verification email sent', 'access_token': token}, 201
+        
 api.add_resource(SignUp, '/signup')
 
-class Logout(Resource):
-    @validate_headers
-    @login_required
-    def get(self):
-        """
-        Handles a GET request to log out the user.
-        """
-        logout_user()
-        return {'message': 'Logout successful'}, 200
-    
-api.add_resource(Logout, '/logout')
 
-class ExchangePassword(Resource):
-    @validate_headers
-    @login_required
-    def post(self):
+class ValidateEmail(Resource):
+    @validate_content_type
+    @validate_api_key
+    def get(self, email_validation_token):
         """
-        Handles the HTTP POST request to change the user's password.
+        This function handles a GET request to validate an email.
+        It expects an email validation token as part of the URL path.
+        The token is decoded using the SECRET_KEY and checked for expiration.
+        If the token is expired, a response with a 401 status code and a 'Token expired' message is returned.
+        If the token is valid, a new User object is created using the decoded payload fields.
+        The user object is then added to the database session and committed.
+        If any error occurs during the database operation, a response with a 500 status code and an 'Error creating user' message is returned.
+        If the user is successfully created, a response with a 201 status code and a 'User created' message is returned.
 
         Parameters:
-            None
-        
-        Example Payload:
-            {
-                "old_password": "password1",
-                "new_password": "password2"
-
-            }
+        - email_validation_token: The email validation token obtained from the URL path.
 
         Returns:
-            A dictionary containing the response message and the HTTP status code.
-    	"""
-        data = request.get_json()
-        old_password = data.get('old_password')
-        new_password = data.get('new_password')
-        user = current_user
-        if not user.check_password(old_password):
-            return {'message': 'Invalid password'}, 401
-        user.password = new_password
-        db.session.commit()
-        return {'message': 'Password changed'}, 200
-api.add_resource(ExchangePassword, '/change_password')
+        A dictionary containing the response message and the HTTP status code.
+        """
+        try:
+            payload = jwt.decode(email_validation_token, SECRET_KEY, algorithms=['HS256'])
+        except jwt.exceptions.ExpiredSignatureError:
+            return {'message': 'Token expired'}, 401
+        
+       
+        try:
+            user = User(payload.get('name'), payload.get('email'), payload.get('password'))
+            db.session.add(user)
+            db.session.commit()
+            access_token = user.generate_access_token()
+        except DataError:
+            return {'message': 'Error creating user'}, 500
+        return {'message': 'User created', 'access_token': access_token}, 201
+
+api.add_resource(ValidateEmail, '/validate_email/<email_validation_token>')
+
+
+
 
 class GenerateRecoveryCode(Resource):
-    @validate_headers
-    def post(self):
+    @validate_content_type
+    @validate_api_key
+    def get(self, email):
         """
-        This function is a POST endpoint that handles the request to generate a recovery token for a given email.
-        
+        Retrieves the recovery code for a user and sends it to their email address.
+
         Parameters:
-            None
-        Example Payload:
-            {
-                "email": "email1@example.com"
+            email (str): The email address of the user.
 
-            }
-            
         Returns:
-            If the email is not found in the User table, it returns a JSON response with a 'message' key set to 'email not found' and a status code of 404.
-            If the email is found, it generates a recovery token for the user and returns a JSON response with a 'recovery_code' key set to the generated token and a status code of 200.
-        """
+            dict: A dictionary containing the message 'Recovery code sent'.
+                  This indicates that the recovery code was successfully sent.
+            int: The HTTP status code 200, indicating a successful request.
 
-        
-        email = request.get_json().get('email')
-        user:User = User.query.filter_by(email=email).first()
+        Raises:
+            404: If the user with the given email address does not exist.
+        """
+        user: User = User.query.filter_by(email=email).first()
         if not user:
-            return {'message': 'email not found'}, 404
-        token = user.generate_recovery_token()
-        return {'recovery_code': token}, 200
-api.add_resource(GenerateRecoveryCode, '/generate_recovery_code')
+            return {'message': 'User does not exist'}, 404
+        recovery_token = user.generate_recovery_token()
+        send_recovery_email(email, recovery_token)
+        return {'message': 'Recovery code sent'}, 200
+    # TODO: Implement a captcha
+api.add_resource(GenerateRecoveryCode, '/generate_recovery_code/<string:email>')
+
+
+
 
 class LoginWithRecoveryCode(Resource):
  
-    @validate_headers
-    def post(self):
+    @validate_api_key
+    @validate_content_type
+    def get(self, recovery_code):
         """
-        Handles a POST request to log in the user using the recovery code.
-
-        Validates the headers of the request using the `validate_headers` decorator.
-
-
-        :return: A dictionary with a message and an HTTP status code.
-        :rtype: dict
-        """
-        secret_key = getenv('SECRET_KEY')
-        payload = jwt.decode(request.json.get('recovery_code'), secret_key, algorithms=['HS256'])
-        if datetime.datetime.strptime(payload.get('expires'), '%Y-%m-%d %H:%M:%S') < datetime.datetime.now():
-            return {'message': 'Recovery code has expired'}, 401
-        user = User.query.filter_by(email=payload.get('email')).first()
-        login_user(user)
-        return {'message': 'Login successful'}, 200
-api.add_resource(LoginWithRecoveryCode, '/login_with_recovery_code')
-
-class CreateGroup(Resource):
-    @validate_headers
-    @login_required
-    def post(self):
-        """
-        Create a new group.
+        Retrieves the user's access token using a recovery code.
 
         Parameters:
-            None
+            recovery_code (str): The recovery code generated for the user.
 
         Returns:
-            - A dictionary with the message 'Group created' and the status code 201 if the group was successfully created.
-            - A dictionary with the message 'Invalid input' and the status code 400 if the input is invalid.
+            dict, int: A dictionary containing the user's access token and HTTP status code.
         """
-       
-        try:
-            data = request.get_json()
-            name = data.get('name')
-            creator = current_user.id
-            event_date = data.get('event_date')
-            min_gift_price = data.get('min_gift_price')
-            max_gift_price = data.get('max_gift_price')
-            creator_desired_gift = data.get('creator_desired_gifts')
-        except KeyError:
-            return {'message': 'Invalid input'}, 400
-        
-
-        if name == '' or event_date == '' or min_gift_price == '' or max_gift_price == '':
-            return {'message': 'Invalid input'}, 400
-        
-        if min_gift_price > max_gift_price:
-            return {'message': 'Invalid input'}, 400
-        
-        
     
-        group = Group(name, creator, event_date, min_gift_price, max_gift_price)
+        try:
+            payload = jwt.decode(recovery_code, SECRET_KEY, algorithms=['HS256'])
+        except jwt.exceptions.ExpiredSignatureError:
+            return {'message': 'Token expired'}, 401
+        user = User.query.filter_by(id=payload.get('id')).first()
+        if not user:
+            return {'message': 'An error occurred'}, 500
+        access_token = user.generate_access_token()
+        return {'access_token': access_token}, 200
+    
+
+api.add_resource(LoginWithRecoveryCode, '/login_with_recovery_code/<string:recovery_code>')
+
+
+
+class CreateGroup(Resource):
+    
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def post(self, user: User):
+        """
+        Creates a new group and adds the current user as the creator and a member of the group.
+
+        Args:
+            user (User): The user object representing the current user.
+        Example Payload:
+            {
+                "name": "New Group",
+                "event_date": "2020-01-01",
+                "min_gift_price": 10,
+                "max_gift_price": 100
+                
+            }
+
+        Returns:
+            dict: A dictionary containing the message 'Group created'.
+            int: The HTTP status code 201 indicating a successful creation.
+        """
+
+        data = request.get_json()
+        description = data.get('description')
+        creator = user.id
+        event_date = datetime.datetime.strptime(data.get('event_date'), '%Y-%m-%d')
+        min_gift_price = data.get('min_gift_price')
+        max_gift_price = data.get('max_gift_price')
+        creator_desired_gift = data.get('creator_desired_gift')
+        if min_gift_price > max_gift_price:
+            return {'message': 'min_gift_price must be less than max_gift_price'}, 412
+        if not description or not event_date or not min_gift_price or not max_gift_price:
+            return {'message': 'Invalid input'}, 400
+        
+        group: Group = Group(description, creator, event_date, min_gift_price, max_gift_price)
+
         db.session.add(group)
         db.session.commit()
-        db.session.add(Friend(current_user.id, group.id, creator_desired_gift))
+        db.session.add(Friend(user.id, group.id, creator_desired_gift))
         db.session.commit()
-
         return {'message': 'Group created'}, 201
-api.add_resource(CreateGroup, '/creategroup')
+    
+       
 
-class GetGroups(Resource):
-    @validate_headers
-    @login_required
-    def get(self):
+api.add_resource(CreateGroup, '/create_group')
+class SuGetUsers(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def get(self, user: User):
+        """
+        A function that retrieves a list of users, this route requires the current user to be a superuser.
+
+        Returns:
+            - If the current user is a superuser, a serialized list of all users.
+            - If the current user is not a superuser, a dictionary with a message indicating unauthorized access and a status code of 401.
+        """
+        if user.is_superuser:
+            serialized_users = [user.serialize() for user in User.query.all()]
+            return{'serialized_users': serialized_users}, 200
+        return {'message': 'Unauthorized'}, 401
+api.add_resource(SuGetUsers, '/sugetusers')
+
+
+class SuGetGroups(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def get(self, user: User):
         """
         A function that retrieves a list of groups, this route requires the current user to be a superuser.
 
@@ -325,17 +355,19 @@ class GetGroups(Resource):
             - If the current user is a superuser, a serialized list of all groups.
             - If the current user is not a superuser, a dictionary with a message indicating unauthorized access and a status code of 401.
         """
-
-        if current_user.is_superuser:
+     
+        if user.is_superuser:
             serialized_groups = [group.serialize() for group in Group.query.all()]
             return serialized_groups
         return {'message': 'Unauthorized'}, 401
-api.add_resource(GetGroups, '/sugetgroups')
+api.add_resource(SuGetGroups, '/sugetgroups')
 
-class GetGroupSuperUser(Resource):
-    @validate_headers
-    @login_required
-    def get(self, group_id):
+class SuGetGroup(Resource):
+    
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def get(self, user, group_id):
         """
         Retrieves a serialized group object based if the current user is a superuser.
 
@@ -347,17 +379,42 @@ class GetGroupSuperUser(Resource):
             dict: {'message': 'Unauthorized'} with status code 401 if the current user is not a superuser.
         """
         
-        if current_user.is_superuser:
-            serialized_group = Group.query.filter_by(id=group_id).first().serialize()
+        if user.is_superuser:
+            
+            serialized_group = Group.query.filter_by(id=group_id).first().su_serialize()
             return serialized_group
         return {'message': 'Unauthorized'}, 401
 
-api.add_resource(GetGroupSuperUser, '/sugetgroup/<string:group_id>')
+api.add_resource(SuGetGroup, '/sugetgroup/<string:group_id>')
 
-class GetGroupCreator(Resource):
-    @validate_headers
-    @login_required
-    def get(self):
+class GetGroup(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def get(self, user, group_id):
+        """
+        Retrieves and serializes a group object based on the specified group ID.
+
+        Args:
+            user (User): The user object making the request.
+            group_id (int): The ID of the group to retrieve.
+
+        Returns:
+            tuple: A tuple containing the serialized group object and the HTTP status code 200.
+        """
+
+        group = Group.query.filter_by(id=group_id).first()
+        serialized_group = group.serialize()
+        
+        return {'serialized_group': serialized_group}, 200
+
+
+class GetGroupCreatedBy(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    
+    def get(self, user):
         """
         Retrieves all groups created by the current user.
 
@@ -365,15 +422,17 @@ class GetGroupCreator(Resource):
             list: A list of serialized group objects representing the groups created by the current user. If no groups are found, an empty list is returned.
         """
 
-        groups = Group.query.filter_by(creator=current_user.id).all()
+        groups = Group.query.filter_by(creator=user.id).all()
         serialized_groups = [group.serialize() for group in groups]
         return serialized_groups if serialized_groups else []
-api.add_resource(GetGroupCreator, '/getcreatorgroups')
+api.add_resource(GetGroupCreatedBy, '/getgroupcreatedby/')
 
 class GetFriendsGroup(Resource):
-    @validate_headers
-    @login_required
-    def get(self, group_id):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    
+    def get(self, user, group_id):
         """
         Get the list of friends in a group.
 
@@ -386,7 +445,7 @@ class GetFriendsGroup(Resource):
         Raises:
             dict: A dictionary with an 'message' key and a status code of 401 if the user is not authorized.
         """
-        user = current_user
+        
         group = Group.query.filter_by(id=group_id).first()
         friend_user = [friend for friend in group.friends if friend.user_id == user.id]
         if friend_user:
@@ -396,63 +455,106 @@ class GetFriendsGroup(Resource):
 api.add_resource(GetFriendsGroup, '/getfriendsgroup/<string:group_id>')
 
 class PerfectDrawnGroup(Resource):
-    @validate_headers
-    @login_required
-    def post(self):
-        """
-        This function is used to handle the POST request for the API endpoint.
-        This endpoint is used to mark a group as "perfect drawn" and draw the secret friends for the group with perfect drawn rules.
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+
+    
+    
+    def put(self, user):
         
-        Parameters:
-            None
-        
-        Returns:
-            A dictionary containing the response message and the corresponding status code.
-            If the user is authorized and has admin privileges in the group, the group will be marked as "perfect drawn" and a success message will be returned with a status code of 200.
-            If the user is not authorized or does not have admin privileges in the group, an error message will be returned with a status code of 401.
-        """
-      
         group:Group = Group.query.filter_by(id=request.json.get('group_id')).first()
-        friend_user = [friend for friend in group.friends if friend.user_id == current_user.id]
+        try:
+
+            friend_user = [friend for friend in group.friends if friend.user_id == user.id]
+        except AttributeError:
+            return {'message': 'An error occurred'}, 500
         
         if friend_user:
             if friend_user[0].is_admin:
                 group.perfect_drawn()
-                return {'message': 'Perfect Drawn'}, 200
+                return {'message': 'Perfect Drawn completed'}, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(PerfectDrawnGroup, '/perfectdrawngroup')
 
-class ImperfectDrawnGroup(Resource):
-    @validate_headers
-    @login_required
-    def post(self):
+class KickOutGroup(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def delete(self, group_id, kicked_user_id, user):
         """
-        This function handles the POST request for the API endpoint.
-        This endpoint is used to mark a group as "imperfect drawn" and draw the secret friends for the group with imperfect drawn rules.
-        
-        Parameters:
-        None
-        
+        A function that handles the DELETE request for kicking out a friend from a group.
+
+        Args:
+            user (User): The user object representing the authenticated user (sent in the request header as authorization).
+            group (Group): The group object representing the group to be kicked out.
+            friend (Friend): The friend object representing the friend to be kicked out.
         Returns:
-        - If the user is authorized and is an admin of the group, it marks the group as imperfectly drawn and returns a success message with status code 200.
-        - If the user is not authorized or is not an admin of the group, it returns an unauthorized message with status code 401.
+            dict: A dictionary containing the response message and status code.
         """
+
+        group:Group = Group.query.filter_by(id=group_id).first()
+        kicker_friend = Friend.query.filter_by(user_id=user.id, group_id=group_id).first()
+        kicked_friend = Friend.query.filter_by(user_id=kicked_user_id, group_id=group_id).first()
+        if kicker_friend and kicker_friend.is_admin and kicked_friend:
+            if group.drawn == "PERFECT" or group.drawn == "IMPERFECT":
+                for friend in group.friends:
+                    friend.friend_id = None
+                group.kick_out(kicked_user_id)
+                group.drawn = "NO"
+                db.session.commit()
+                return {'message': 'User Kicked, Another Draw Must Be Made'}, 200
+            else:
+                group.kick_out(kicked_user_id)
+                return {'message': 'User Kicked'}, 200
+        return {'message': 'Unauthorized'}, 401
     
+
+              
+
+api.add_resource(KickOutGroup, '/kickoutgroup/<string:group_id>/<string:kicked_user_id>')
+
+
+
+class ImperfectDrawnGroup(Resource):
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+
+    
+    
+    def put(self, user):
+        """
+        A function that handles the PUT request for updating a user's group.
+
+        Args:
+            user (User): The user object representing the authenticated user.
+
+        Returns:
+            dict: A dictionary containing the response message and status code.
+        """
+        
+        
        
         group = Group.query.filter_by(id=request.get_json().get('group_id')).first()
-        friend_user = [friend for friend in group.friends if friend.user_id == current_user.id]
+        try:
+            friend_user = [friend for friend in group.friends if friend.user_id == user.id]
+        except AttributeError:
+            return {'message': 'An error occurred'}, 500
         if friend_user:
             if friend_user[0].is_admin:
                 group.imperfect_drawn()
-                return {'message': 'Imperfect Drawn'}, 200
+                return {'message': 'Imperfect Drawn completed'}, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(ImperfectDrawnGroup, '/imperfectdrawngroup')
             
 
 class GetMyFriend(Resource):
-    @validate_headers
-    @login_required
-    def get(self, group_id):
+    
+    @validate_api_key
+    @validate_content_type
+    @required_access_token
+    def get(self, user, group_id):
         """
         Retrieves information about a friend in a group.
 
@@ -467,10 +569,12 @@ class GetMyFriend(Resource):
         """
      
         group = Group.query.filter_by(id=group_id).first()
-        friend_user = [friend for friend in group.friends if friend.user_id == current_user.id]
+        friend_user = [friend for friend in group.friends if friend.user_id == user.id]
+        
         if friend_user:
             return{'friend_name': friend_user[0].serialize()['friend_name'], 
                    'friend_id': friend_user[0].friend_id, 
                    'friend_gift':Friend.query.filter_by(user_id=friend_user[0].friend_id).first().gift_desired}, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(GetMyFriend, '/getmyfriend/<string:group_id>')
+

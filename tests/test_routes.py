@@ -1,514 +1,503 @@
+
 import root_path
 root_path.define_sys_path()
 
+from app.utils import test_headers
 import jwt
-import app.rest
+import app.rest as rest
 from config_test import create_db
 from app.models import User, db, Friend
 from dotenv import load_dotenv
 from os import getenv
-from flask_login import current_user, login_user
+
 from flask.testing import FlaskClient
 from app.models import Group
 import unittest
 import datetime
 from freezegun import freeze_time
+import uuid
 
 load_dotenv()
+
+
+def setup(testcase):
+    """
+    Sets up the necessary context and objects for a test case.
+    
+    Args:
+        testcase: The test case object.
+    
+    Returns:
+        None
+    """
+    testcase.app = create_db()
+    testcase.app_context = testcase.app.app_context()
+    testcase.app_context.push()
+    testcase.request_context = testcase.app.test_request_context()
+    testcase.request_context.push()
+    testcase.app_test = FlaskClient(testcase.app)
+    
+    
+
+def teardown(testcase):
+    """
+    A function to tear down the testcase by popping the app context and request context.
+
+    Args:
+        testcase: The testcase object.
+
+    Returns:
+        None
+    """
+    testcase.app_context.pop()
+    testcase.request_context.pop()
+
 
 
 
 class LoginTestCase(unittest.TestCase):
    
     def setUp(self):
-        self.app = create_db()
-        self.app_context = self.app.app_context()
-        self.app_context.push()
-        self.app_test = FlaskClient(self.app)
+        setup(self)
+       
 
     def tearDown(self):
-        with self.app.app_context():
-            db.session.remove()
-            db.drop_all()
+        teardown(self)
+       
 
-    def test_login_sucessfull(self):
+    def test_login_sucessful(self):
         """
         Test the successful login functionality.
 
-        Test the functionality of the login feature when the provided credentials are valid.
-        This function sends a POST request to the '/login' endpoint with a payload containing 
-        the email and password. It then checks if the response status code is 200, indicating 
-        a successful login. It also verifies that the logged-in user's email matches the 
-        provided email.
+        This function sends a POST request to the '/login' endpoint with a valid email and password.
+        It then checks if the response status code is 200 and if the access token in the response
+        matches the access token generated for the user with the given email.
 
         Parameters:
-        - self: The instance of the test class.
+            self (object): The current instance of the test class.
 
         Returns:
-        - None
+            None
         """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                payload = {
-                    'email': 'email1@example.com',
-                    'password': 'password1'
-                }
-                headers = {
-                    'Content-Type': 'application/json',
-                    'API-Key': getenv('SECRET_KEY'),
-                    'Content-Length': str(len(payload))
-                }
-                response = self.app_test.post('/login', json=payload, headers=headers)
-                self.assertEqual(response.status_code, 200)
-                user = User.query.filter_by(email='email1@example.com').first()
-                self.assertEqual(user.id, current_user.id)
-
-    def test_generate_recovery_code(self):
-        """
-        Test the generate_recovery_code endpoint.
-
-        This function tests the behavior of the generate_recovery_code endpoint by making a POST request
-        to the '/generate_recovery_code' URL with a valid email payload. It asserts that the response
-        status code is 200.
-
-        Parameters:
-        - self: The test case instance.
-
-        Returns:
-        - None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                payload = {
-                    'email': 'email1@example.com'
-                }
-                response = self.app_test.post('/generate_recovery_code', json=payload,
-                                              headers={'Content-Type': 'application/json',
-                                                       'API-Key': getenv('SECRET_KEY'),
-                                                       'Content-Length': len(payload)})
-                self.assertEqual(response.status_code, 200)
-
-    def test_login_with_recovery_code(self):
-        """
-        Test the login with recovery code functionality.
-        
-        :return: None
-        """
-
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                recovery_code = user.generate_recovery_token()
-                payload = {
-                    'recovery_code': recovery_code
-                }
-                response = self.app_test.post('/login_with_recovery_code',
-                                              json=payload,
-                                              headers={'Content-Type': 'application/json',
-                                                       'API-Key': getenv('SECRET_KEY'), 
-                                                       'Content-Length': len(payload)})
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(user.id, current_user.id)
+        with freeze_time('2019-12-01 01:01:01'):
+            payload = {
+                'email': 'email1@example.com',
+                'password': 'password1'
+            }
     
+            headers = test_headers(payload)
+            response = self.app_test.post('/login', json=payload, headers=headers)
+            user:User = User.query.filter_by(email='email1@example.com').first()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json['access_token'], user.generate_access_token())
 
-    def test_login_with_recovery_code_expired(self):
-        simulated_current_time = datetime.datetime.now()
-
-        with freeze_time(simulated_current_time):
-            with self.app.app_context():
-                with self.app.test_request_context():
-                    user = User.query.filter_by(email='email1@example.com').first()
-                    recovery_code = user.generate_recovery_token()
-
-            simulated_current_time += datetime.timedelta(hours=2)
-
-            with freeze_time(simulated_current_time):
-                with self.app.app_context():
-                    with self.app.test_request_context():
-                        payload = {
-                            'recovery_code': recovery_code
-                        }
-                        response = self.app_test.post('/login_with_recovery_code',
-                                                    json=payload,
-                                                    headers={'Content-Type': 'application/json',
-                                                             'API-Key': getenv('SECRET_KEY'), 
-                                                             'Content-Length': len(payload)})
-                        self.assertEqual(response.status_code, 401)
-            
-
+    def test_login_failed(self):
+        payload = {
+            'email': 'email1@example.com',
+            'password': 'wrongpassword'
+        }
+        headers = test_headers(payload)
+        response = self.app_test.post('/login', json=payload, headers=headers)
+        self.assertEqual(response.status_code, 401)
 
 class SignUpTestCase(unittest.TestCase):
     def setUp(self):
-        self.app = create_db()
-        self.app_test = FlaskClient(self.app)
+        setup(self)
+       
 
     def tearDown(self):
-        with self.app.app_context():
-            db.session.remove()
-            db.drop_all()
-
-    def test_signup(self):
-        """
-        Test the signup functionality.
-
-        This function tests the signup functionality of the application. It creates a test context
-        and a test request context to simulate a request to the `/signup` endpoint. It sends a POST
-        request with a payload containing the user's name, email, and password. The function then
-        asserts that the response status code is 201, indicating a successful signup.
-
-        Args:
-            self (object): The instance of the test class.
-
-        Returns:
-            None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                payload = {
-                    'name': 'user5',
-                    'email': 'email5@example.com',
-                    'password': 'password5'
-
-                }
-                response = self.app_test.post('/signup', 
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                  'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)
-                                                  })
-                self.assertEqual(response.status_code, 201)
-
-    def test_signup_invalid_email(self):
-        """
-        Test the signup functionality with an invalid email address.
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                payload = {
-                    'name': 'user5',
-                    'email': 'email5',
-                    'password': 'password5'
-                }
-                response = self.app_test.post('/signup',
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                   'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)})
-                self.assertEqual(response.status_code, 400)
-
-    def test_signup_duplicate_email(self):
-        """
-        Test if signing up with a duplicate email returns a 400 status code.
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                payload = {
-                    'name': 'user5',
-                    'email': 'email4@example.com',
-                    'password': 'password5'
-                }
-                response = self.app_test.post('/signup', 
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                   'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)
-                                                  })
-                self.assertEqual(response.status_code, 400)
-
-
-class GroupTestCase(unittest.TestCase):
-    def setUp(self):
-        self.app = create_db()
-
-        self.app_test = FlaskClient(self.app)
-
-    def tearDown(self):
-        with self.app.app_context():
-            db.session.remove()
-            db.drop_all()
-
-    def test_create_group(self):
-        """
-        Test the create_group function.
-        
-        This function tests the create_group function in the current class. It sets up the necessary context and request for testing, creates a user object, logs in the user, and prepares a payload with the required data for creating a group. It then sends a POST request to the '/creategroup' endpoint with the payload and headers. Finally, it asserts that the response status code is 201, indicating that the group was successfully created.
-        
-        Parameters:
-            self (TestClassName): The current instance of the test class.
-            
-        Returns:
-            None
-        """
-
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                login_user(user)
-                payload = {
-                    'name': 'group2',
-                    'creator': current_user.id,
-                    'event_date': datetime.datetime.now().__str__(),
-                    'min_gift_price': 100,
-                    'max_gift_price': 200, 
-                    'creator_desired_gift': 'gift1'
-
-                }
-                response = self.app_test.post('/creategroup',
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                  'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)
-                                                  })
-                self.assertEqual(response.status_code, 201)
-
-    def test_su_get_groups(self):
-        """
-        Test case for the `su_get_groups` function.
-
-        This test case checks if the `su_get_groups` function behaves correctly under certain conditions.
-        It sets up a test environment, performs a mock login, and sends a test request to the API endpoint.
-        The expected behavior is that the response status code should be 200.
-
-        Parameters:
-        - self: The test case object.
-
-        Returns:
-        - None
-        """
+        teardown(self)
    
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                login_user(user)
-                response = self.app_test.get(
-                    '/sugetgroups', headers={'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 200)
+    def test_successful(self):
 
+        with freeze_time('2019-12-01 01:01:01'):
+           payload = {
+               'name': 'test',
+               'email': 'test@example.com',
+               'password': 'test'
+           }
+           headers = test_headers(payload)
+           response = self.app_test.post('/signup', json=payload, headers=headers)
+           payload['exp'] = datetime.datetime.now() + datetime.timedelta(days=1)
+           test_token = jwt.encode(payload, rest.SECRET_KEY, algorithm='HS256')
+           self.assertEqual(response.status_code, 201)
+           self.assertEqual(response.json['access_token'], test_token)
+    
+    def test_key_error(self):
+        payload = {
+            'name': 'test',
+            'email': 'test@example.com'
+        }
+        headers = test_headers(payload)
+        response = self.app_test.post('/signup', json=payload, headers=headers)
+        self.assertEqual(response.json['message'],'Invalid input')
+    
+    def test_not_found_email(self):
+        payload = {
+            'name': 'test',
+            'email': 'email1@example.com',
+            'password': 'test'
+        }
+        headers = test_headers(payload)
+        response = self.app_test.post('/signup', json=payload, headers=headers)
+        self.assertEqual(response.json['message'],'User already exists')
 
-    def test_su_get_groups_unautorized(self):
-        """
-        Test the 'su_get_groups_unautorized' function.
-        This function tests the behavior of the 'su_get_groups_unautorized' function in the current context.
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email2@example.com').first()
-                login_user(user)
-                response = self.app_test.get(
-                    '/sugetgroups', headers={'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 401)
+    def test_invalid_email(self):
+        payload = {
+            'name': 'test',
+            'email': 'test',
+            'password': 'test'
+        }
+        headers = test_headers(payload)
+        response = self.app_test.post('/signup', json=payload, headers=headers)
+        self.assertEqual(response.json['message'],'Invalid email')
 
-    def test_su_get_group(self):
-        """
-        Test the 'su_get_group' endpoint.
+class ValidateEmailTestCase(unittest.TestCase):   
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_validate_email_sucessful(self):
+        with freeze_time('2019-12-01 01:01:01'):
+            data = {
+                'name': 'test',
+                'email': 'test@example.com',
+                'password': 'test', 
+                'exp': (datetime.datetime.now() + datetime.timedelta(days=1)).timestamp()
+            }
+            payload = {
+                'email_validation_token': jwt.encode(data, rest.SECRET_KEY, algorithm='HS256')
+            }
+            headers = test_headers(payload)
+            email_validation_token = payload['email_validation_token']
+            response = self.app_test.get(f'/validate_email/{email_validation_token}', headers=headers)
+            self.assertEqual(response.status_code, 201)
+            user = User.query.filter_by(email='test@example.com').first()
+            self.assertIsNotNone(user)
+    
+    def test_validate_email_with_expired_token(self):
+        with freeze_time('2019-12-01 01:01:01'):
+            data = {
+                'name': 'test',
+                'email': 'test@example.com',
+                'password': 'test', 
+                'exp': (datetime.datetime.now() - datetime.timedelta(days=10)).timestamp()
+            }
+            payload = {
+                'email_validation_token': jwt.encode(data, rest.SECRET_KEY, algorithm='HS256')
+            }
+            headers = test_headers(payload)
+            email_validation_token = payload['email_validation_token']
+            response = self.app_test.get(f'/validate_email/{email_validation_token}', headers=headers)
+            self.assertEqual(response.status_code, 401)
 
-        This function tests the 'su_get_group' endpoint of the API. It makes a GET
-        request to the endpoint with the given group ID and asserts that the 
-        response status code is 200.
+class GenerateRecoveryCodeTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+       
 
-        Parameters:
-        - self: The test class instance.
+    def tearDown(self):
+        teardown(self)
+    
+    def test_generate_recovery_code(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        email = user.email
 
-        Returns:
-        - None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                login_user(user)
-                group_id = Group.query.filter_by(name='group1').first().id
-                response = self.app_test.get('/sugetgroup/{}'.format(group_id), headers={
-                                             'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 200)
+        with freeze_time('2019-12-01 01:01:01'):
+            headers = test_headers()
+            response = self.app_test.get(f'/generate_recovery_code/{email}', headers=headers)
+            self.assertEqual(response.status_code, 200)
 
-    def test_su_get_group_unautorized(self):
-        """
-        This function tests the behavior of the 'su_get_group_unauthorized' API endpoint when an unauthorized user tries to access it.
-
-        Parameters:
-            self (TestCase): The current test case.
+class LoginWithRecoveryCodeTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+      
+    def test_login_with_valid_recovery_token(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        with freeze_time('2019-12-01 01:01:01'):
+            recovery_code = user.generate_recovery_token()
+            headers = test_headers()
+            response = self.app_test.get(f'/login_with_recovery_code/{recovery_code}', headers=headers)
+            self.assertAlmostEqual(response.status_code, 200)
+    
+    def test_login_with_invalid_id_recovery_token(self):
+        fake_user = User(name='fake_user', email='fake_user@example.com', password='fake_user')
+        fake_user.id = uuid.uuid4().hex
+        with freeze_time('2019-12-01 01:01:01'):
+            fake_token = fake_user.generate_recovery_token()
+            headers = test_headers()
+            response = self.app_test.get(f'/login_with_recovery_code/{fake_token}', headers=headers)
+            self.assertAlmostEqual(response.status_code, 500)
         
-        Returns:
-            None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email2@example.com').first()
-                login_user(user)
-                group_id = Group.query.filter_by(name='group1').first().id
-                response = self.app_test.get('/sugetgroup/{}'.format(group_id), headers={
-                                             'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 401)
+    def test_login_with_expired_recovery_token(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        with freeze_time('2019-12-01 01:01:01'):
+            recovery_code = user.generate_recovery_token()
+            headers = test_headers()
+        with freeze_time('2019-12-03 01:01:01'):
+            response = self.app_test.get(f'/login_with_recovery_code/{recovery_code}', headers=headers)
+        self.assertAlmostEqual(response.status_code, 401)
+    
 
-    def test_get_group(self):
-        """
-        Test the 'get_group' API endpoint.
+    
+    
 
-        This function tests the functionality of the 'get_group' API endpoint. It simulates a user accessing the endpoint
-        and verifies that the response status code is 200.
+class CreateGroupTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+       
 
-        Parameters:
-        - self: The instance of the test case.
-        
-        Returns:
-        - None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                login_user(user)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_create_group(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        with freeze_time('2019-12-01 01:01:01'):
+            payload = {
+                'description': 'test',
+                'creator_id': user.id,
+                'event_date': (datetime.datetime.now()+datetime.timedelta(days=20)).strftime('%Y-%m-%d'),
+                'min_gift_price': 10,
+                'max_gift_price': 20, 
+                'creator_desired_gift': 'gift'
+            }
+            headers = test_headers(payload=payload,authorization=user.generate_access_token())
+            response = self.app_test.post('/create_group', json=payload, headers=headers)
 
-                response = self.app_test.get(
-                    '/getcreatorgroups', headers={'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 200)
+    def test_create_group_invalid_gift_prices(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        with freeze_time('2019-12-01 01:01:01'):
+            payload = {
+                'description': 'test',
+                'creator_id': user.id,
+                'event_date': (datetime.datetime.now()+datetime.timedelta(days=20)).strftime('%Y-%m-%d'),
+                'min_gift_price': 10,
+                'max_gift_price': 0, 
+                'creator_desired_gift': 'gift'
+            }
+            headers = test_headers(payload=payload,authorization=user.generate_access_token())
+            response = self.app_test.post('/create_group', json=payload, headers=headers)
+            self.assertEqual(response.status_code, 412)
+
+class GetFriendsGroupTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
 
     def test_get_friends_group(self):
-        """
-        Test the functionality of the `get_friends_group` endpoint.
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        response = self.app_test.get(f'/getfriendsgroup/{group.id}', headers=test_headers(authorization=user.generate_access_token()))
+        self.assertEqual(response.status_code, 200)
+
+class PerfectDrawnTestCase(unittest.TestCase):
+    def setUp(self):
         
-        This function tests the behavior of the `get_friends_group` endpoint by simulating a request to retrieve the friends group with the given ID. It verifies that the response status code is 200, indicating a successful request.
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    
+
+    def test_perfect_drawn(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+
+        group:Group = Group.query.filter_by(description='group1').first()
+        self.assertEqual(group.drawn, 'NO')
+        payload = {
+            'group_id': group.id
+        }
         
-        Parameters:
-        - self: The current instance of the test case.
+        response = self.app_test.put('/perfectdrawngroup', json=payload, headers=test_headers(authorization=user.generate_access_token()))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(group.drawn , 'PERFECT')
+    
+    
+    def test_perfect_draw_without_admin(self):
+        user = User.query.filter_by(email='email2@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        self.assertEqual(group.drawn, 'NO')
+        payload = {
+            'group_id': group.id
+        }
+        response = self.app_test.put('/perfectdrawngroup', json=payload, headers=test_headers(authorization=user.generate_access_token()))
+        self.assertEqual(response.status_code, 401)
+
+
+class ImperfectDrawnTestCase(unittest.TestCase):
+    def setUp(self):
+       
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    def test_imperfect_drawn(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        self.assertEqual(group.drawn, 'NO')
+        payload = {
+            'group_id': group.id
+        }
+        response = self.app_test.put('/imperfectdrawngroup', 
+                                     json=payload, 
+                                     headers=test_headers(authorization=user.generate_access_token()))
+        self.assertEqual(response.status_code, 200)
         
-        Return Type:
-        - None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = User.query.filter_by(email='email1@example.com').first()
-                login_user(user)
-                group = Group.query.filter_by(name='group1').first()
-                response = self.app_test.get('/getfriendsgroup/{}'.format(group.id), headers={
-                                             'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 200)
+        self.assertEqual(group.drawn , 'IMPERFECT')
 
-    def test_get_friends_group_unautorized(self):
-        """
-        Test the get_friends_group_unauthorized function.
+    def test_imperfect_draw_without_admin(self):
+        user = User.query.filter_by(email='email2@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        self.assertEqual(group.drawn, 'NO')
+        payload = {
+            'group_id': group.id
+        }
+        response = self.app_test.put('/imperfectdrawngroup', 
+                                     json=payload, 
+                                     headers=test_headers(authorization=user.generate_access_token()))
+        self.assertEqual(response.status_code, 401)
 
-        This function tests the functionality of the get_friends_group_unauthorized
-        endpoint. It ensures that the endpoint returns a 401 status code when an
-        unauthorized user tries to access the group's friends.
 
-        Parameters:
-        - self: The current instance of the test class.
+class SugetGroupsTestCase(unittest.TestCase):
+    
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_sugetgroups(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/sugetgroups', headers=headers)
+        self.assertEqual(response.status_code, 200)
+    
+    def test_sugetgroups_without_super_user(self):
+        user = User.query.filter_by(email='email2@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/sugetgroups', headers=headers)
+        self.assertEqual(response.status_code, 401)
 
-        Returns:
-        - None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user5 = User('user5', 'email5@example.com', 'password5')
-                db.session.add(user5)
-                db.session.commit()
-                login_user(user5)
-                group = Group.query.filter_by(name='group1').first()
-                response = self.app_test.get('/getfriendsgroup/{}'.format(group.id), headers={
-                                             'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-                self.assertEqual(response.status_code, 401)
+class SugetUsersTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_sugetusers(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/sugetusers', headers=headers)
+        self.assertEqual(response.status_code, 200)
+    
+    def test_sugetusers_without_super_user(self):
+        user = User.query.filter_by(email='email2@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/sugetusers', headers=headers)
+        self.assertEqual(response.status_code, 401)
 
-    def test_perfect_drawn_group(self):
-        """
-        Test the perfect drawn group functionality.
+class SugetGroupTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_sugetgroup(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get(f'/sugetgroup/{group.id}', headers=headers)
+        self.assertEqual(response.status_code, 200)
+    def test_sugetgroup_without_super_user(self):
+        user = User.query.filter_by(email='email2@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+       
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get(f'/sugetgroup/{group.id}', headers=headers)
+        self.assertEqual(response.status_code, 401)
 
-        This function tests the perfect drawn group functionality by simulating a request to the '/perfectdrawngroup' endpoint.
-        It ensures that the response status code is 200 and that the 'drawn' attribute of the group is set to True.
-        It also checks that all the friends associated with the group have a non-null 'friend_id'.
+class UserTestCase(unittest.TestCase):
 
-        Parameters:
-        - self: The current instance of the test case.
+    def setUp(self):
+        #I do no want to re-create the db for each test, so I call a function to re-create the db
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    
+    def test_get_group_created_by(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/getgroupcreatedby/', headers=headers)
+        self.assertEqual(response.status_code, 200)
 
-        Returns:
-        None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = db.session.query(User).filter_by(
-                    email='email1@example.com').first()
-                login_user(user)
-                group = Group.query.filter_by(name='group1').first()
-                payload = {
-                    'group_id': group.id,
-                }
-                response = self.app_test.post('/perfectdrawngroup',
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                  'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)
-                                                  })
+    def test_get_my_friend(self):
+        user = User.query.filter_by(email='email1@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        group = Group.query.filter_by(description='group1').first()
+        group.perfect_drawn()
+        response = self.app_test.get(f'/getmyfriend/{group.id}', headers=headers)
+        self.assertEqual(response.status_code, 200)
+    
+class KickGroupTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
+    def test_kick_group_before_draw(self):
+        
+        admin = User.query.filter_by(email='email1@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        user = User.query.filter_by(email='email2@example.com').first()     
+        token = admin.generate_access_token()   
+        friend = Friend.query.filter_by(user_id=user.id, group_id=group.id).first()
+        response = self.app_test.delete(f'/kickoutgroup/{group.id}/{user.id}', 
+                                        headers=test_headers(authorization=token))
+        group = Group.query.filter_by(id=group.id).first()
+        self.assertEqual(response.status_code, 200)
 
-                self.assertEqual(response.status_code, 200)
-                self.assertTrue(group.drawn)
-                self.assertTrue(all([friend.friend_id for friend in group.friends]))
+        
+        self.assertEqual(group.drawn, 'NO')
+        self.assertEqual(len(group.friends), 3)  
+        expected_response = {'message': 'User Kicked'}
+        self.assertEqual(response.json, expected_response)
+    
+    def test_kick_group_after_draw(self):
+        
+        admin = User.query.filter_by(email='email1@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        group.imperfect_drawn()
+        user = User.query.filter_by(email='email2@example.com').first()     
+        token = admin.generate_access_token()   
+        friend = Friend.query.filter_by(user_id=user.id, group_id=group.id).first()
+        response = self.app_test.delete(f'/kickoutgroup/{group.id}/{user.id}', 
+                                        headers=test_headers(authorization=token))
+        group = Group.query.filter_by(id=group.id).first()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(group.drawn, 'NO')
+        expected_response = {'message': 'User Kicked, Another Draw Must Be Made'}
+        self.assertEqual(response.json, expected_response)
+    def test_no_admin_try_kick(self):
+        fake_admin = User.query.filter_by(email='email2@example.com').first()
+        group:Group = Group.query.filter_by(description='group1').first()
+        user = User.query.filter_by(email='email2@example.com').first()
+        token = fake_admin.generate_access_token()
+        response = self.app_test.delete(f'/kickoutgroup/{group.id}/{user.id}',
+                                        headers=test_headers(authorization=token))
+        self.assertEqual(response.status_code, 401)
+        
+       
 
-    def test_imperfect_drawn_group(self):
-        """
-        Test the imperfect drawn group functionality.
+        
 
-        This function tests the functionality of the '/imperfectdrawngroup' API endpoint.
-        It ensures that a group can be marked as drawn and that all friends in the group
-        have a friend_id associated with them.
-
-        Parameters:
-        - self: The current instance of the test class.
-
-        Returns:
-        None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = db.session.query(User).filter_by(
-                    email='email1@example.com').first()
-                login_user(user)
-                group = Group.query.filter_by(name='group1').first()
-                payload = {
-                    'group_id': group.id
-                }
-                response = self.app_test.post('/imperfectdrawngroup',
-                                              json=payload,
-                                              headers={
-                                                  'Content-Type': 'application/json',
-                                                  'API-Key': getenv('SECRET_KEY'),
-                                                  'Content-Length': len(payload)
-                                                  })
-                self.assertEqual(response.status_code, 200)
-                self.assertTrue(group.drawn)
-                self.assertTrue(
-                    all([friend.friend_id for friend in group.friends]))
-
-    def test_getmyfriend(self):
-        """
-        Test the getmyfriend API endpoint.
-
-        The function sends a GET request to the '/getmyfriend/{group_id}' endpoint
-        with the necessary headers and parameters. It asserts that the response
-        status code is 200.
-
-        Parameters:
-        - self: The current test case object.
-
-        Returns:
-        None
-        """
-        with self.app.app_context():
-            with self.app.test_request_context():
-                user = db.session.query(User).filter_by(
-                    email='email1@example.com').first()
-                login_user(user)
-                group: Group = Group.query.filter_by(name='group1').first()
-                group.perfect_drawn()
-            
-                response = self.app_test.get('/getmyfriend/{}'.format(group.id),
-                                             headers={'Content-Type': 'application/json', 'API-Key': getenv('SECRET_KEY')})
-
-                self.assertEqual(response.status_code, 200)
+    
+    
+    
 
 
 if __name__ == '__main__':
     unittest.main()
+    
+

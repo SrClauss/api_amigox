@@ -14,6 +14,8 @@ def create_db():
         app (Flask): The Flask app object with the testing flag set to True.
     """
     with app.app_context():
+        
+        db.session.close()
         db.drop_all()
         db.create_all()
 

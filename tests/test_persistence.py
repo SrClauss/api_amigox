@@ -16,7 +16,7 @@ class TestModels(unittest.TestCase):
             self.assertEqual(len(Group.query.all()), 1)
             self.assertEqual(len(Friend.query.all()), 4)
             group = Group.query.first()
-            self.assertEqual(group.name, 'group1')
+            self.assertEqual(group.description, 'group1')
             self.assertEqual(db.session.query(Friend).where(Friend.group_id == group.id).count(), 4)
     def test_password_check(self):
         with app.app_context():
@@ -35,6 +35,14 @@ class TestModels(unittest.TestCase):
             group:Group = Group.query.first()
             group.imperfect_drawn()
             self.assertFalse(any(friend.friend_id == friend.user_id for friend in group.friends))
+    def test_kickout(self):
+        with app.app_context():
+            user = User.query.filter_by(email='email1@example.com').first()
+            group = Group.query.first()
+            friend = Friend.query.filter_by(group_id = group.id, user_id = user.id).first()
+            group.kick_out(friend.user_id)
+            self.assertEqual(len(Friend.query.all()), 3)
+
     def tearDown(self):
         with app.app_context():
             db.session.remove()
