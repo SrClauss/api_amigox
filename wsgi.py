@@ -1,8 +1,10 @@
-from app.models import db, User, Group, Friend, app
+from app.models import User, Group, Friend
+import app.config as app_config
 import datetime
-
 from app.rest import api
 
+
+app, db = app_config.app, app_config.db
 
 if __name__ == '__main__':
    
@@ -13,10 +15,10 @@ if __name__ == '__main__':
 
         
         users = [
-            User('user1', 'email1@example.com', 'password1'),
-            User('user2', 'email2@example.com', 'password2'),
-            User('user3', 'email3@example.com', 'password3'),
-            User('user4', 'email4@example.com', 'password4')
+            User('user1', 'email1@example.com','www.instagram.com/user1', 'password1'),
+            User('user2', 'email2@example.com','www.instagram.com/user2', 'password2'),
+            User('user3', 'email3@example.com','www.instagram.com/user3', 'password3'),
+            User('user4', 'email4@example.com','www.instagram.com/user4', 'password4')
         ]
         users[0].is_superuser = True
         
@@ -40,4 +42,6 @@ if __name__ == '__main__':
 
         db.session.commit()
     
+    import logging
+    logging.basicConfig(filemode='api.log', level=logging.DEBUG)
     app.run()

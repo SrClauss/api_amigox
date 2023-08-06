@@ -3,21 +3,18 @@ import root_path
 root_path.define_sys_path()
 
 from app.utils import test_headers
-import jwt
 import app.rest as rest
+from app.models import User, Friend, Group
 from config_test import create_db
-from app.models import User, db, Friend
-from dotenv import load_dotenv
-from os import getenv
-
-from flask.testing import FlaskClient
-from app.models import Group
-import unittest
 import datetime
+from flask.testing import FlaskClient
 from freezegun import freeze_time
+import jwt
+import unittest
 import uuid
 
-load_dotenv()
+
+
 
 
 def setup(testcase):
@@ -114,6 +111,7 @@ class SignUpTestCase(unittest.TestCase):
            payload = {
                'name': 'test',
                'email': 'test@example.com',
+               'social_media': 'www.instagram.com/test',
                'password': 'test'
            }
            headers = test_headers(payload)
@@ -430,7 +428,7 @@ class UserTestCase(unittest.TestCase):
     def test_get_group_created_by(self):
         user = User.query.filter_by(email='email1@example.com').first()
         headers = test_headers(authorization=user.generate_access_token())
-        response = self.app_test.get('/getgroupcreatedby/', headers=headers)
+        response = self.app_test.get('/getgroupcreatedby', headers=headers)
         self.assertEqual(response.status_code, 200)
 
     def test_get_my_friend(self):
@@ -479,6 +477,7 @@ class KickGroupTestCase(unittest.TestCase):
         self.assertEqual(group.drawn, 'NO')
         expected_response = {'message': 'User Kicked, Another Draw Must Be Made'}
         self.assertEqual(response.json, expected_response)
+    
     def test_no_admin_try_kick(self):
         fake_admin = User.query.filter_by(email='email2@example.com').first()
         group:Group = Group.query.filter_by(description='group1').first()
@@ -487,11 +486,21 @@ class KickGroupTestCase(unittest.TestCase):
         response = self.app_test.delete(f'/kickoutgroup/{group.id}/{user.id}',
                                         headers=test_headers(authorization=token))
         self.assertEqual(response.status_code, 401)
-        
+
        
 
         
+class JoinedGroupTestCase(unittest.TestCase):
+    def setUp(self):
+        setup(self)
+    def tearDown(self):
+        teardown(self)
 
+    def test_get_joined_groups(self):
+        user:User = User.query.filter_by(email='email1@example.com').first()
+        headers = test_headers(authorization=user.generate_access_token())
+        response = self.app_test.get('/getjoinedgroups', headers=headers)
+        self.assertEqual(response.status_code, 200)
     
     
     

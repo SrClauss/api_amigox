@@ -1,10 +1,13 @@
 import root_path
 root_path.define_sys_path()
 import unittest
-from app.models import User, Group, Friend, db, app
+from app.models import User, Group, Friend
+import app.config as app_config
 from dotenv import load_dotenv
 from config_test import create_db
 
+
+db, app = app_config.db, app_config.app
 load_dotenv()
 
 class TestModels(unittest.TestCase):

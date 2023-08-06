@@ -1,6 +1,9 @@
-from app.models import User, Group, Friend, db, app
+from app.models import User, Group, Friend
+import app.config as app_config
 import datetime
 
+
+db, app = app_config.db, app_config.app
 def create_db():
     """
     Creates a new database and populates it with initial data.
@@ -20,10 +23,10 @@ def create_db():
         db.create_all()
 
         users = [
-            User('user1', 'email1@example.com', 'password1'),
-            User('user2', 'email2@example.com', 'password2'),
-            User('user3', 'email3@example.com', 'password3'),
-            User('user4', 'email4@example.com', 'password4')
+            User('user1', 'email1@example.com','www.instagram.com/user1', 'password1'),
+            User('user2', 'email2@example.com','www.instagram.com/user2', 'password2'),
+            User('user3', 'email3@example.com','www.instagram.com/user3', 'password3'),
+            User('user4', 'email4@example.com','www.instagram.com/user4', 'password4')
         ]
         users[0].is_superuser = True
         

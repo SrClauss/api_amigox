@@ -1,8 +1,11 @@
+from flask_jwt_extended import JWTManager
 from flask_sqlalchemy import SQLAlchemy
 from flask import Flask
 from flask_restful import Api
 from dotenv import load_dotenv
 from os import getenv
+from flask_cors import CORS
+
 
 
 
@@ -39,3 +42,8 @@ def create_app():
     return app
 
 
+app = create_app()
+db = SQLAlchemy(app)
+api = Api(app)
+jwt = JWTManager(app)
+CORS(app)

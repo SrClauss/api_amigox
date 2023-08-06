@@ -1,69 +1,33 @@
 
-from flask_restful import request, Resource, Api
+from flask_restful import request, Resource
 from dotenv import load_dotenv
 from os import getenv
-from app.models import User, app, db, Group, Friend
+from app.models import User, Group, Friend
+import app.config as app_config
 import re
-from sqlalchemy.exc import IntegrityError, DataError
+from sqlalchemy.exc import  DataError
 from functools import wraps
 import jwt
 import datetime
 from app.utils import send_confirmation_email, send_recovery_email
 load_dotenv()
 
-api = Api(app)
 
+db, api = app_config.db, app_config.api
 
 API_KEY = getenv('API_KEY')
 SECRET_KEY = getenv('SECRET_KEY')
 
-def validate_api_key(f):
+
+
+def required_api_key(f):
     @wraps(f)
     def decorator(*args, **kwargs):
-        """
-        A decorator function that checks the 'API-Key' header in the request and
-        validates it against the predefined API key. If the header is missing or
-        the API key is invalid, it returns a response with an appropriate error
-        message and status code. Otherwise, it calls the decorated function with
-        the given arguments and returns its result.
-
-        Parameters:
-            f (function): The function to be decorated.
-
-        Returns:
-            function: A decorated function that performs the 'API-Key' header
-            validation before calling the original function.
-        """
-    
-        if 'API-Key' not in request.headers:
-            return {'message': 'API-Key header not found'}, 401
-        elif request.headers['API-Key'] != API_KEY:
-            return {'message': 'Invalid API Key'}, 401
+        if "Api_Key" not in request.headers:
+            return {'message': 'Api_Key header not found'}, 401
+        if request.headers['Api_Key'] != API_KEY:
+            return {'message': 'Api_Key does not match'}, 401
         return f(*args, **kwargs)
-    return decorator
-
-def validate_content_type(f):
-    @wraps(f)
-    def decorator(*args, **kwargs):
-        """
-        Decorator function that checks if the 'Content-Type' header is present in the request headers.
-        If the header is not present or if it is not 'application/json', it returns an error response.
-        Otherwise, it calls the decorated function with the provided arguments.
-
-        Parameters:
-            *args: The positional arguments passed to the decorated function.
-            **kwargs: The keyword arguments passed to the decorated function.
-
-        Returns:
-            A tuple containing a dictionary with an error message and a status code if the 'Content-Type' header is invalid.
-            Otherwise, it returns the result of the decorated function.
-        """
-        if 'Content-Type' not in request.headers:
-            return {'message': 'Content-Type header not found'}, 415
-        elif request.headers['Content-Type'] != 'application/json':
-            return {'message': 'Content-Type header must be application/json'}, 415
-        return f(*args, **kwargs)
-    return decorator
 
 def required_access_token(f):
     @wraps(f)
@@ -89,6 +53,7 @@ def required_access_token(f):
        
         if payload.get('exp') < int(datetime.datetime.now().timestamp()):
             return {'message': 'Token expired'}, 401
+        
         user = User.query.filter_by(id=payload.get('id')).first()
 
         return f(*args, **kwargs, user=user)
@@ -96,13 +61,24 @@ def required_access_token(f):
 
     return decorator
 
+def generate_logs(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        import logging
+        logging.basicConfig(filemode='api.log', level=logging.DEBUG)
+        logger = logging.getLogger(__name__)
+        #logger.debug('Request Headers: %s', request.headers)
+        logger.debug('Request Body: %s', request.get_json())
+        return func(*args, **kwargs)
+    return wrapper
 
-
+#TODO An decorator with verify if the user logged is
 
 class Login(Resource):
-    @validate_content_type
-    @validate_api_key
+ 
+    
     def post(self):
+
         '''
         Handles a POST request to log in the user.
 
@@ -122,6 +98,7 @@ class Login(Resource):
         user = User.query.filter_by(email=request.json.get('email')).first()
         if user:
             if user.check_password(request.json.get('password')):
+                
                 token = user.generate_access_token()
                 return {'access_token': token}, 200
             
@@ -129,8 +106,7 @@ class Login(Resource):
 api.add_resource(Login, '/login')
 
 class SignUp(Resource):
-    @validate_content_type
-    @validate_api_key
+   
     def post(self):
         """
         Handles a POST request to create a new user and generate a token for email verification
@@ -151,6 +127,7 @@ class SignUp(Resource):
         name = data.get('name')
         email = data.get('email')
         password = data.get('password')
+        social_media = data.get('social_media')
  
         if not name or not email or not password:
             return {'message': 'Invalid input'}, 400
@@ -165,6 +142,7 @@ class SignUp(Resource):
             'name': name,
             'email': email,
             'password': password,
+            'social_media': social_media,
             'exp': datetime.datetime.now() + datetime.timedelta(days=1)
         }
         token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
@@ -177,8 +155,8 @@ api.add_resource(SignUp, '/signup')
 
 
 class ValidateEmail(Resource):
-    @validate_content_type
-    @validate_api_key
+    
+    
     def get(self, email_validation_token):
         """
         This function handles a GET request to validate an email.
@@ -217,8 +195,8 @@ api.add_resource(ValidateEmail, '/validate_email/<email_validation_token>')
 
 
 class GenerateRecoveryCode(Resource):
-    @validate_content_type
-    @validate_api_key
+    
+    
     def get(self, email):
         """
         Retrieves the recovery code for a user and sends it to their email address.
@@ -248,8 +226,8 @@ api.add_resource(GenerateRecoveryCode, '/generate_recovery_code/<string:email>')
 
 class LoginWithRecoveryCode(Resource):
  
-    @validate_api_key
-    @validate_content_type
+    
+    
     def get(self, recovery_code):
         """
         Retrieves the user's access token using a recovery code.
@@ -278,8 +256,8 @@ api.add_resource(LoginWithRecoveryCode, '/login_with_recovery_code/<string:recov
 
 class CreateGroup(Resource):
     
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def post(self, user: User):
         """
@@ -325,8 +303,8 @@ class CreateGroup(Resource):
 
 api.add_resource(CreateGroup, '/create_group')
 class SuGetUsers(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+
     @required_access_token
     def get(self, user: User):
         """
@@ -338,14 +316,14 @@ class SuGetUsers(Resource):
         """
         if user.is_superuser:
             serialized_users = [user.serialize() for user in User.query.all()]
-            return{'serialized_users': serialized_users}, 200
+            return  serialized_users, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(SuGetUsers, '/sugetusers')
 
 
 class SuGetGroups(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def get(self, user: User):
         """
@@ -358,14 +336,14 @@ class SuGetGroups(Resource):
      
         if user.is_superuser:
             serialized_groups = [group.serialize() for group in Group.query.all()]
-            return serialized_groups
+            return serialized_groups, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(SuGetGroups, '/sugetgroups')
 
 class SuGetGroup(Resource):
     
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def get(self, user, group_id):
         """
@@ -388,8 +366,8 @@ class SuGetGroup(Resource):
 api.add_resource(SuGetGroup, '/sugetgroup/<string:group_id>')
 
 class GetGroup(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def get(self, user, group_id):
         """
@@ -410,8 +388,8 @@ class GetGroup(Resource):
 
 
 class GetGroupCreatedBy(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     
     def get(self, user):
@@ -425,11 +403,11 @@ class GetGroupCreatedBy(Resource):
         groups = Group.query.filter_by(creator=user.id).all()
         serialized_groups = [group.serialize() for group in groups]
         return serialized_groups if serialized_groups else []
-api.add_resource(GetGroupCreatedBy, '/getgroupcreatedby/')
+api.add_resource(GetGroupCreatedBy, '/getgroupcreatedby')
 
 class GetFriendsGroup(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     
     def get(self, user, group_id):
@@ -455,8 +433,8 @@ class GetFriendsGroup(Resource):
 api.add_resource(GetFriendsGroup, '/getfriendsgroup/<string:group_id>')
 
 class PerfectDrawnGroup(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
 
     
@@ -478,8 +456,8 @@ class PerfectDrawnGroup(Resource):
 api.add_resource(PerfectDrawnGroup, '/perfectdrawngroup')
 
 class KickOutGroup(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def delete(self, group_id, kicked_user_id, user):
         """
@@ -517,8 +495,8 @@ api.add_resource(KickOutGroup, '/kickoutgroup/<string:group_id>/<string:kicked_u
 
 
 class ImperfectDrawnGroup(Resource):
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
 
     
@@ -551,8 +529,8 @@ api.add_resource(ImperfectDrawnGroup, '/imperfectdrawngroup')
 
 class GetMyFriend(Resource):
     
-    @validate_api_key
-    @validate_content_type
+    
+    
     @required_access_token
     def get(self, user, group_id):
         """
@@ -577,4 +555,49 @@ class GetMyFriend(Resource):
                    'friend_gift':Friend.query.filter_by(user_id=friend_user[0].friend_id).first().gift_desired}, 200
         return {'message': 'Unauthorized'}, 401
 api.add_resource(GetMyFriend, '/getmyfriend/<string:group_id>')
+
+class GetCurrentUser(Resource):
+    @required_access_token
+    def get(self, user):
+        """
+        Retrieves information about the current user.
+
+        args:
+            user (User): The user object representing the authenticated user.
+        returns:
+            dict: A dictionary containing the user's name, ID, and email.
+            int: The HTTP status code 200 if the request is successful.
+            dict: A dictionary containing an error message if the request is unauthorized.
+            int: The HTTP status code 401 if the request is unauthorized.
+        """
+
+        return user.serialize(), 200
+
+api.add_resource(GetCurrentUser, '/user')
+
+
+class GetJoinedGroups(Resource):
+    @required_access_token
+    def get(self, user):
+        """
+        Retrieves all groups the current user is a member of.
+
+        args:
+            user (User): The user object representing the authenticated user.
+        returns:
+            list: A list of serialized group objects representing the groups the current user is a member of.
+            int: The HTTP status code 200 if the request is successful.
+            dict: A dictionary containing an error message if the request is unauthorized.
+            int: The HTTP status code 401 if the request is unauthorized.
+        """
+
+        friends = Friend.query.filter_by(user_id=user.id).all()
+        if friends:
+            groups = []
+            for friend in friends:
+                groups.append(Group.query.get(friend.group_id))
+
+            return [group.serialize() for group in groups], 200
+        
+api.add_resource(GetJoinedGroups, '/getjoinedgroups')
 

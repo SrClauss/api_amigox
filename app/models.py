@@ -1,26 +1,18 @@
 from werkzeug.security import generate_password_hash, check_password_hash
 from app.utils import generate_pairs
 from flask_sqlalchemy import SQLAlchemy
-from app.config import create_app
+import app.config as app_config
 from sqlalchemy.orm import Query
 from typing import List, Tuple
 from sqlalchemy import DECIMAL
 import datetime
 import random
 import uuid
-from dotenv import load_dotenv
 from os import getenv
 import jwt
-from flask_cors import CORS
-from enum import Enum
-
-app = create_app()
-db = SQLAlchemy(app)
-cors = CORS(app, resources={r"/*": {"origins": "*"}})
 
 
-
-
+db = app_config.db
     
 class BaseModel(db.Model):
     __abstract__ = True
@@ -34,9 +26,10 @@ class User(BaseModel):
     id = db.Column(db.String(32), primary_key=True, default=lambda: str(uuid.uuid4().hex))
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
+    social_media = db.Column(db.String(240), nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_superuser = db.Column(db.Boolean, default=False)
-
+    banned = db.Column(db.Boolean, default=False)
     @property
     def password(self):
         raise AttributeError('password is not a readable attribute')
@@ -67,9 +60,10 @@ class User(BaseModel):
 
     
 
-    def __init__(self, name, email, password):
+    def __init__(self, name, email, social_media, password):
         self.name = name
         self.email = email
+        self.social_media = social_media
         self.password = password
     
     def __repr__(self):
@@ -79,7 +73,8 @@ class User(BaseModel):
         return {
             'id': self.id,
             'username': self.name,
-            'email': self.email
+            'email': self.email,
+            'social_media': self.social_media
         }
     
 
@@ -179,6 +174,7 @@ class Friend(BaseModel):
             'group_id': self.group_id,
             'gift_desired': self.gift_desired,
             'friend_name': friend.name if friend else None,
+            'social_media': friend.social_media if friend else None,
             'friend_id': self.friend_id,
             'is_admin': self.is_admin
         }
@@ -193,6 +189,7 @@ class Friend(BaseModel):
             'group_id': self.group_id,
             'gift_desired': self.gift_desired,
             'friend_name': friend.name if friend else None,
+            'social_media': friend.social_media if friend else None,
             'friend_id': 'unauthorized',
             'is_admin': self.is_admin
         }
